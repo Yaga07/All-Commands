@@ -1,0 +1,3 @@
+sudo docker build -t pradip69/blood_bank07:v2 .
+sudo docker tag pradip69/blood_bank07 pradip69/blood_bank07:v2
+sudo docker push pradip69/blood_bank07:v2

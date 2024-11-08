@@ -1,0 +1,3 @@
+xcode-select --install
+brew install llvm libomp
+pip install torch==2.1.2

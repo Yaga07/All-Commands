@@ -1,0 +1,175 @@
+IMP
+================================================
+Check whether Region Allows G4dn support or not?
+
+
+CPU :  "OS ubuntu 20.04.4 LTS (Focal Fossa)" (t3a.xlarge 4 vCPU | 16 GB memory)
+
+>> Create a Security group rule that allows 
+Type Protocol   Port  range  Source
+All  traffic	All	  All    Self SG ID
+
+>> Swap disabled. You MUST disable swap in order for the kubelet to work properly.
+sudo swapoff -a
+
+>> Pre-Requisites for POD Networking          (perform as root user) (Must require)
+1. Enable module if not in running state : (( Verify: lsmod | grep br_netfilter ))
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+2. Enables rules
+sudo cat > /etc/sysctl.d/20-bridge-nf.conf <<EOF
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+EOF
+sudo sysctl --system
+
+>> Installation AWS CLI
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"; sudo apt install unzip -y; unzip awscliv2.zip; sudo ./aws/install
+
+
+>> Installing containerd for CPU only (containerd 1.6.32 [old 1.6.24] is is supportive to k8s v1.27.9)
+wget -q https://github.com/containerd/containerd/releases/download/v1.6.32/containerd-1.6.32-linux-amd64.tar.gz && tar Cxzvf /usr/local containerd-1.6.32-linux-amd64.tar.gz
+
+
+>> To start containerd via systemd, user should also create containerd.service
+sudo mkdir -p /usr/local/lib/systemd/system;
+vi /usr/local/lib/systemd/system/containerd.service
+
+[Unit]
+Description=containerd container runtime
+Documentation=https://containerd.io
+After=network.target local-fs.target
+
+[Service]
+ExecStartPre=-/sbin/modprobe overlay
+ExecStart=/usr/local/bin/containerd
+
+Type=notify
+Delegate=yes
+KillMode=process
+Restart=always
+RestartSec=5
+
+# Having non-zero Limit*s causes performance problems due to accounting overhead
+# in the kernel. We recommend using cgroups to do container-local accounting.
+LimitNPROC=infinity
+LimitCORE=infinity
+
+# Comment TasksMax if your systemd version does not supports it.
+# Only systemd 226 and above support this version.
+TasksMax=infinity
+OOMScoreAdjust=-999
+
+[Install]
+WantedBy=multi-user.target
+
+
+>> runc installation (old v: v1.1.9)
+wget -q https://github.com/opencontainers/runc/releases/download/v1.1.12/runc.amd64 && install -m 755 runc.amd64 /usr/local/sbin/runc
+
+>> Generate default config for containersd via :
+mkdir -p  /etc/containerd && containerd config default > /etc/containerd/config.toml
+
+>> To use the systemd cgroup driver in /etc/containerd/config.toml with runc, Set below to true & restart containerd service + Setup Containerd start automatically at boot time:
+discard_unpacked_layers = true
+SystemdCgroup = true
+
+systemctl restart containerd && systemctl  enable containerd.service
+
+
+>> Installing kubelet kubeadm kubectl to create K8S cluster
+sudo apt-get update && sudo apt-get install -y apt-transport-https ca-certificates curl && sudo mkdir -p /etc/apt/keyrings && \
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.27/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg && \
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.27/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+sudo apt-get update; sudo apt-get install -y kubelet kubeadm kubectl; sudo apt-mark hold kubelet kubeadm kubectl && sudo cp -f /usr/bin/kubectl /usr/local/bin/
+
+>> Initializing your control-plane/Master node (Default cgroup driver is systemd)
+sudo kubeadm init --pod-network-cidr=10.244.0.0/16 --token-ttl 0   --node-name master
+
+>> Authenticate regular users to access the CLUSTER
+mkdir -p $HOME/.kube &&   sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config && sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+
+>> Modify or Ensure the container runtime cgroup driver set to systemd on allworker node
+Set cgroupDriver: systemd in /var/lib/kubelet/config.yaml
+
+
+>> Install Flannel for pod networking
+kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+
+>> Setup Worker node (Optional)
+kubeadm token create --print-join-command --ttl=0
+
+
+
+>> To schedule/unschedule Pods on the control(matser) plane node | Differentiate between CPU and Dynamic GPU execute labels command:
+schedule pod    ::   kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+unschedule pod  ::   kubectl taint nodes --all node-role.kubernetes.io/control-plane:NoSchedule node-role.kubernetes.io/master:NoSchedule
+
+APPLY LABEL TO NODE    : kubectl label node <nodename> <labelname>=cpu
+REMOVE LABEL FROM NODE : kubectl label node <nodename> <labelname>-
+
+>> Create a release namespace; Clone repo and start installing Pantheon Lite Helm charts:
+kubectl create namespace <ns_name>; git clone https://github.com/qritive/helm-charts-deployments.git;
+cd helm-charts-deployments && git checkout pl-managed-charts
+
+>> Get details of ingress and insert the appropriate exposed endpoints url entry in Route53
+kubectl get ingress
+✪⎈
+>> Installing Cluster autoscaler AND Nginx ingress with helm realese
+sudo snap install helm --classic && helm repo add nginx-stable https://helm.nginx.com/stable && helm repo add autoscaler https://kubernetes.github.io/autoscaler && helm repo update 
+helm upgrade --install cluster-autoscaler -n kube-system -f helm-values/cluster-autoscaler.yaml autoscaler/cluster-autoscaler
+helm upgrade --install nginx-ingress -n ingress nginx-stable/nginx-ingress -f helm-values/nginx-values.yaml --create-namespace=true
+
+>> Deploy Nvidia Support GPU (Only Once) ### for more info: https://github.com/NVIDIA/k8s-device-plugin#quick-start
+kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.1/nvidia-device-plugin.yml
+
+>> For DLAMI Ubuntu 18.04 pre-Requisites
+cat > /etc/containerd/config.toml <<EOF
+version = 2
+[plugins]
+  [plugins."io.containerd.grpc.v1.cri"]
+    [plugins."io.containerd.grpc.v1.cri".containerd]
+      default_runtime_name = "nvidia"
+
+      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia]
+          privileged_without_host_devices = false
+          runtime_engine = ""
+          runtime_root = ""
+          runtime_type = "io.containerd.runc.v2"
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia.options]
+            BinaryName = "/usr/bin/nvidia-container-runtime"
+EOF
+systemctl restart containerd
+
+>> To Add ProviderID in Nodes for Cluster Autoscaler, Create, Attach ClusterRole using ClusterRoleBinding to Custom serviceaccount. (Create same account in kube-system ns)
+Create SA  : kubectl create serviceaccount manage-node -n <namespace> ; kubectl create serviceaccount manage-node -n kube-system
+Create CR  : kubectl create clusterrole manage-node --verb=get,patch,list,delete --resource=nodes
+Craete CRB : kubectl create clusterrolebinding manage-node --clusterrole=manage-node  --serviceaccount=<namespace>:manage-node --serviceaccount=kube-system:manage-node
+
+>> Ensure AI job contains service account name in Manifest: manage-node
+
+>> Ensure below exist in Ai Job > initContainer.
+AWS_ID=`curl -XGET http://169.254.169.254/latest/meta-data/instance-id` && AWS_AZ=`curl -XGET http://169.254.169.254/latest/meta-data/placement/availability-zone`
+kubectl patch node $NODE_NAME -p '{"spec":{"providerID":"aws:///$AWS_AZ/$AWS_ID"}}'                       ## $NODE_NAME from ENV https://kubernetes.io/docs/tasks/inject-data-application/environment-variable-expose-pod-information/#use-pod-fields-as-values-for-environment-variables
+
+>> (Remedy) To fix cni0(SandBox) error on specific worker node: (Require login to the worker node and execute below commands)
+ip link delete cni0
+ip link delete flannel.1
+
+>> (Remedy) Recover/Debug Cluster on CPU After rebooting System
+systemctl  start containerd.service && systemctl  start kubelet.service
+
+
+>> (Improvement) Pull AI Job image in Ec2 and update AMI with latest Image stored locally
+Download docker image locally.
+docker save <image-name> -o <filename.tar>; ctr -n=k8s.io images import <filename.tar>;
+Remove docker local image + <filename.tar> before creating AMI from the machine.

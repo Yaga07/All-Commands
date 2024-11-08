@@ -1,0 +1,188 @@
+Containerd installation && remove steps
+=============================================
+
+if your containerd is not working, you want to remove it 
+--------------------------------------------------------
+ sudo apt-get remove containerd.io
+ sudo rm -rf /etc/containerd/
+ sudo rm /usr/bin/containerd
+ sudo rm /etc/systemd/system/containerd.service
+
+
+Find the latest or requierd release version of containerd from below link
+-------------------------------------------------------------------------
+The official binary releases of containerd are available for the amd64 (also known as x86_64) and arm64 (also known as aarch64) architectures.
+
+Step 1: Installing containerd
+Download the containerd-<VERSION>-<OS>-<ARCH>.tar.gz archive from https://github.com/containerd/containerd/releases , verify its sha256sum, and extract it under /usr/local
+
+installing dependancys:-
+sudo apt-get install -y libseccomp2
+
+wget https://github.com/containerd/containerd/releases/download/v1.7.11/containerd-1.7.11-linux-amd64.tar.gz
+
+sudo tar Cxzvf /usr/local containerd-1.7.11-linux-amd64.tar.gz
+
+output:-
+-------
+bin/
+bin/containerd-shim-runc-v2
+bin/containerd-shim
+bin/ctr
+bin/containerd-shim-runc-v1
+bin/containerd
+bin/containerd-stress
+
+
+sudo apt-get install -y containerd
+sudo systemctl daemon-reload
+sudo apt-get install containerd
+sudo systemctl enable --now containerd
+sudo systemctl status containerd
+containerd --version
+
+Step 2: Installing runc
+Download the runc.<ARCH> binary from https://github.com/opencontainers/runc/releases , verify its sha256sum, and install it as /usr/local/sbin/runc
+
+wget https://github.com/opencontainers/runc/releases/download/v1.1.10/runc.amd64
+
+install -m 755 runc.amd64 /usr/local/sbin/runc
+or 
+sudo apt-get update
+sudo apt-get install runc
+sudo apt-get install build-essential -y
+sudo mv runc.amd64 /usr/local/bin/
+runc --version
+apt list -a runc
+
+Step 3: Installing CNI plugins
+Download the cni-plugins-<OS>-<ARCH>-<VERSION>.tgz archive from https://github.com/containernetworking/plugins/releases , verify its sha256sum, and extract it under /opt/cni/bin:
+
+wget https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz
+sudo mkdir -p /opt/cni/bin
+sudo tar Cxzvf /opt/cni/bin cni-plugins-linux-amd64-v1.4.0.tgz
+
+Output:-
+--------
+./
+./macvlan
+./static
+./vlan
+./portmap
+./host-local
+./vrf
+./bridge
+./tuning
+./firewall
+./host-device
+./sbr
+./loopback
+./dhcp
+./ptp
+./ipvlan
+./bandwidth
+
+Run this command on master and worker nodes
+-------------------------------------------
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl.sha256"
+echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+
+If valid, the output is:
+kubectl: OK
+
+If the check fails, sha256 exits with nonzero status and prints output similar to:
+kubectl: FAILED
+sha256sum: WARNING: 1 computed checksum did NOT match
+Note: Download the same version of the binary and checksum.
+
+Install kubectl
+===================
+
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+Note:
+If you do not have root access on the target system, you can still install kubectl to the ~/.local/bin directory:
+
+chmod +x kubectl
+mkdir -p ~/.local/bin
+mv ./kubectl ~/.local/bin/kubectl
+# and then append (or prepend) ~/.local/bin to $PATH
+
+kubectl version --client
+kubectl version --client --output=yaml
+
+Install using native package management
+=======================================
+sudo apt-get update
+# apt-transport-https may be a dummy package; if so, you can skip that package
+sudo apt-get install -y apt-transport-https ca-certificates curl
+
+sudo mkdir -p /etc/apt/keyrings/
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.27/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.27/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+
+sudo apt-get update
+sudo apt-get install -y kubelet kubeadm kubectl
+sudo apt-mark hold kubelet kubeadm kubectl
+
+-------------------ONLY FOR CHEACK------------------------------------
+ls -la /etc/apt/keyrings
+ip route show
+sudo swapoff -a
+ip link
+ifconfig -a
+sudo cat /sys/class/dmi/id/product_uuid
+
+
+nc 127.0.0.1 6443
+sudo modprobe br_netfilter
+echo "net.bridge.bridge-nf-call-iptables = 1" | sudo tee -a /etc/sysctl.conf
+sudo sysctl net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward = 1" | sudo tee -a /etc/sysctl.conf
+sudo kubeadm init --pod-network-cidr=10.244.0.0/16 --control-plane-endpoint=172.31.55.160
+172.31.55.160
+
+
+kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+
+After the above command you get a key which is join the worker node with master which is somthing look like below
+=================================================================================================================
+kubeadm join <master-node-ip>:<master-node-port> --token <token> --discovery-token-ca-cert-hash <hash>
+
+
+Run that token in the workernode
+================================
+sudo kubeadm join <master-node-ip>:<master-node-port> --token <token> --discovery-token-ca-cert-hash <hash>
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+For the worker node give a role for the worker
+==============================================
+kubectl label node worker-ubuntu-20e node-role.kubernetes.io/worker=worker1
+
+kubectl get nodes
+NAME               STATUS   ROLES           AGE    VERSION
+master-ubuntu-20   Ready    control-plane   3h5m   v1.27.9
+worker-ubuntu-20   Ready    worker          63s    v1.27.9
+
+kubectl taint nodes worker-ubuntu-20e node.kubernetes.io/not-ready:NoExecute-
+kubectl taint nodes worker-ubuntu-20e node.kubernetes.io/not-ready:NoSchedule-
+
+kubeadm token create --print-join-command
+ 
+kubadm  install kube-prometheus-stack 
+=========================================
+helm repo update
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm install prometheus prometheus-community/kube-prometheus-stack
+
+Access Grafana Dashboard:
+=========================
+kubectl get secret --namespace default prometheus-grafana -o jsonpath="{.data.admin-password}" | base64 --decode ; echo
+
+
+http://prometheus-kube-prometheus-prometheus.default:9090/
+
+kubeadm init --pod-network-cidr=172.168.0.0/16 --control-plane-endpoint=172.31.60.81

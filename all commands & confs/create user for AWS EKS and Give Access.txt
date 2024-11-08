@@ -1,0 +1,7 @@
+#create IAM user and attach policies or add into group 
+
+# give access to user such as admin edit read
+kubectl edit cm aws-auth -n kube-system
+
+#then create or use assisting rolebinding 
+kubectl get rolebindings.rbac.authorization.k8s.io -n pl-dev workfall-prabu -oyaml
